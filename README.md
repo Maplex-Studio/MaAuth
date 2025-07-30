@@ -1,4 +1,4 @@
-# Express Easy Auth
+# MaAuth
 
 A simple, powerful JWT-based authentication middleware for Express.js with built-in user management and database integration.
 
@@ -14,14 +14,14 @@ A simple, powerful JWT-based authentication middleware for Express.js with built
 ## Installation
 
 ```bash
-npm install express-easy-auth
+npm install @maplex-studio/maauth
 ```
 
 ## Quick Start
 
 ```javascript
 const express = require('express');
-const createAuth = require('express-easy-auth');
+const createAuth = require('@maplex-studio/maauth');
 
 const app = express();
 
@@ -53,7 +53,7 @@ That's it! Your app now has full authentication with these routes:
 ## Configuration
 
 ```javascript
-const createAuth = require('express-easy-auth');
+const createAuth = require('@maplex-studio/maauth');
 
 app.use(createAuth({
   jwtSecret: 'your-super-secret-key',    // JWT signing secret
@@ -184,7 +184,7 @@ Authorization: Bearer your-jwt-token
 
 ```javascript
 const express = require('express');
-const createAuth = require('express-easy-auth');
+const createAuth = require('@maplex-studio/maauth');
 
 const app = express();
 
@@ -424,7 +424,7 @@ When first started, the system creates:
 
 ```javascript
 const express = require('express');
-const createAuth = require('express-easy-auth');
+const createAuth = require('@maplex-studio/maauth');
 
 const app = express();
 
