@@ -6,7 +6,8 @@ A simple, powerful JWT-based authentication middleware for Express.js with built
 
 - 🔐 **JWT Authentication** - Secure token-based authentication
 - 👤 **User Management** - Built-in user creation, deletion, and password management
-- 🛡️ **Role-Based Access** - Admin and user roles with proper permissions
+- 🛡️ **Role-Based Access** - Admin, user, and root roles with proper permissions
+- 👑 **Root User Management** - Special root user with highest privileges
 - 💾 **Database Integration** - Uses `easy-database` for seamless data storage
 - 🚀 **Zero Configuration** - Works out of the box with sensible defaults
 - 🔧 **Highly Configurable** - Customize everything to fit your needs
@@ -47,6 +48,7 @@ That's it! Your app now has full authentication with these routes:
 - `POST /api/v1/auth/create-user` - Create new user (admin only)
 - `DELETE /api/v1/auth/delete-user/:username` - Delete user (admin only)
 - `GET /api/v1/auth/users` - List all users (admin only)
+- `GET /api/v1/auth/root` - Get root user info (root only)
 - `GET /api/v1/auth/me` - Get current user info
 - `POST /api/v1/auth/logout` - Logout
 
@@ -60,6 +62,8 @@ app.use(createAuth({
   jwtExpiry: '24h',                       // Token expiry time
   apiPrefix: '/api/v1/auth',              // API route prefix
   saltRounds: 10,                         // bcrypt salt rounds
+  rootUsername: 'superadmin',             // Custom root username
+  rootPassword: 'mysecretpassword',       // Custom root password
   database: {                             // Database options
     storage: './myauth.sqlite',
     logging: false
@@ -92,6 +96,7 @@ Login with username and password.
     "id": 1,
     "username": "root",
     "role": "admin",
+    "isRoot": true,
     "lastLogin": "2024-01-15T10:30:00.000Z"
   }
 }
@@ -138,8 +143,23 @@ Authorization: Bearer admin-jwt-token
 }
 ```
 
+**Response:**
+```json
+{
+  "success": true,
+  "message": "User created successfully",
+  "user": {
+    "id": 2,
+    "username": "newuser",
+    "role": "user",
+    "isActive": true,
+    "isRoot": false
+  }
+}
+```
+
 #### `DELETE /api/v1/auth/delete-user/:username`
-Delete a user (admin only).
+Delete a user (admin only). Root user cannot be deleted.
 
 **Headers:**
 ```
@@ -163,10 +183,35 @@ Authorization: Bearer admin-jwt-token
       "id": 1,
       "username": "root",
       "role": "admin",
+      "isRoot": true,
       "createdAt": "2024-01-15T10:00:00.000Z",
       "lastLogin": "2024-01-15T10:30:00.000Z"
     }
   ]
+}
+```
+
+#### `GET /api/v1/auth/root`
+Get root user information (root only).
+
+**Headers:**
+```
+Authorization: Bearer root-jwt-token
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "rootUser": {
+    "id": 1,
+    "username": "root",
+    "role": "admin",
+    "isRoot": true,
+    "createdAt": "2024-01-15T10:00:00.000Z",
+    "lastLogin": "2024-01-15T10:30:00.000Z",
+    "isActive": true
+  }
 }
 ```
 
@@ -176,6 +221,21 @@ Get current user information.
 **Headers:**
 ```
 Authorization: Bearer your-jwt-token
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "user": {
+    "id": 1,
+    "username": "root",
+    "role": "admin",
+    "isRoot": true,
+    "createdAt": "2024-01-15T10:00:00.000Z",
+    "lastLogin": "2024-01-15T10:30:00.000Z"
+  }
+}
 ```
 
 ## Protecting Routes
@@ -206,6 +266,14 @@ app.get('/admin-only', createAuth.adminOnly(), (req, res) => {
     user: req.user 
   });
 });
+
+// Root only route - highest privilege level
+app.get('/root-only', createAuth.rootOnly(), (req, res) => {
+  res.json({ 
+    message: 'Root access granted!',
+    user: req.user 
+  });
+});
 ```
 
 ### Protect Route Groups
@@ -227,6 +295,48 @@ router.get('/profile', (req, res) => {
 app.use('/app', router);
 ```
 
+### Root-Only Route Group
+
+```javascript
+const rootRouter = express.Router();
+
+// All routes in this router require root access
+rootRouter.use(createAuth.rootOnly());
+
+rootRouter.get('/system-config', (req, res) => {
+  res.json({ message: 'System configuration', user: req.user });
+});
+
+rootRouter.get('/critical-settings', (req, res) => {
+  res.json({ message: 'Critical system settings', user: req.user });
+});
+
+app.use('/root', rootRouter);
+```
+
+## User Roles and Permissions
+
+The system supports three levels of access:
+
+### 1. Regular Users (`role: "user"`)
+- Can login and access protected routes
+- Can change their own password
+- Can view their own profile
+
+### 2. Admin Users (`role: "admin"`)
+- All user permissions
+- Can create new users
+- Can delete users (except root)
+- Can change any user's password
+- Can list all users
+
+### 3. Root User (`isRoot: true`)
+- All admin permissions
+- Highest privilege level
+- Cannot be deleted
+- Has access to root-only routes
+- Can access special root user information
+
 ## Frontend Integration
 
 ### Login Example (JavaScript)
@@ -247,6 +357,8 @@ async function login(username, password) {
     // Store token
     localStorage.setItem('authToken', data.token);
     console.log('Logged in as:', data.user.username);
+    console.log('Is root:', data.user.isRoot);
+    console.log('Role:', data.user.role);
   } else {
     console.error('Login failed:', data.message);
   }
@@ -272,6 +384,9 @@ async function makeAuthenticatedRequest(url) {
 // Usage
 const userInfo = await makeAuthenticatedRequest('/api/v1/auth/me');
 const protectedData = await makeAuthenticatedRequest('/protected');
+
+// Root-only request
+const rootInfo = await makeAuthenticatedRequest('/api/v1/auth/root');
 ```
 
 ### React Hook Example
@@ -321,11 +436,29 @@ function useAuth() {
     setUser(null);
   };
 
-  return { user, loading, login, logout };
+  return { 
+    user, 
+    loading, 
+    login, 
+    logout,
+    isRoot: user?.isRoot || false,
+    isAdmin: user?.role === 'admin' || false
+  };
 }
 ```
 
 ## Advanced Usage
+
+### Custom Root User Configuration
+
+```javascript
+app.use(createAuth({
+  rootUsername: 'superadmin',      // Custom root username
+  rootPassword: 'ultra-secure-password',  // Custom root password
+  jwtSecret: process.env.JWT_SECRET,
+  jwtExpiry: '7d'
+}));
+```
 
 ### Custom Database Configuration
 
@@ -342,22 +475,14 @@ app.use(createAuth({
 }));
 ```
 
-### Custom JWT Configuration
-
-```javascript
-app.use(createAuth({
-  jwtSecret: process.env.JWT_SECRET,
-  jwtExpiry: '7d',  // 7 days
-  saltRounds: 12    // Higher security
-}));
-```
-
 ### Environment Variables
 
 ```bash
 # .env file
 JWT_SECRET=your-super-secret-jwt-key
 JWT_EXPIRY=24h
+ROOT_USERNAME=superadmin
+ROOT_PASSWORD=ultra-secure-password
 DB_PATH=./production.sqlite
 ```
 
@@ -367,6 +492,8 @@ require('dotenv').config();
 app.use(createAuth({
   jwtSecret: process.env.JWT_SECRET,
   jwtExpiry: process.env.JWT_EXPIRY,
+  rootUsername: process.env.ROOT_USERNAME,
+  rootPassword: process.env.ROOT_PASSWORD,
   database: {
     storage: process.env.DB_PATH
   }
@@ -395,30 +522,35 @@ Common HTTP status codes:
 ## Security Features
 
 - **Password Hashing** - Uses bcrypt with configurable salt rounds
-- **JWT Tokens** - Secure, stateless authentication
-- **Role-Based Access** - Admin and user roles
+- **JWT Tokens** - Secure, stateless authentication with user ID tracking
+- **Role-Based Access** - Admin, user, and root roles
+- **Root User Protection** - Root user identified by `isRoot` flag, not username
 - **Input Validation** - Validates all user inputs
-- **Protected Root User** - Root user cannot be deleted
+- **Protected Root User** - Root user cannot be deleted by any user
 - **Active User Check** - Only active users can login
+- **Flexible Root Identity** - Root user can have any username
 
 ## Default Users
 
 When first started, the system creates:
-- **Username:** `root`
-- **Password:** `changeme`
+- **Username:** `root` (configurable)
+- **Password:** `changeme` (configurable)
 - **Role:** `admin`
+- **isRoot:** `true`
 
 **⚠️ Important:** Change the root password immediately in production!
 
 ## Best Practices
 
 1. **Change Default Password**: Always change the root password
-2. **Use Environment Variables**: Store JWT secret in environment variables
-3. **Use HTTPS**: Always use HTTPS in production
-4. **Token Expiry**: Set appropriate token expiry times
-5. **Validate Input**: Always validate user input on frontend
-6. **Handle Errors**: Implement proper error handling
-7. **Logout Handling**: Clear tokens on logout
+2. **Custom Root Username**: Consider using a custom root username for security
+3. **Use Environment Variables**: Store JWT secret and root credentials in environment variables
+4. **Use HTTPS**: Always use HTTPS in production
+5. **Token Expiry**: Set appropriate token expiry times
+6. **Validate Input**: Always validate user input on frontend
+7. **Handle Errors**: Implement proper error handling
+8. **Logout Handling**: Clear tokens on logout
+9. **Root Access**: Use root-only routes sparingly for critical operations
 
 ## Complete Example
 
@@ -432,6 +564,8 @@ const app = express();
 app.use(createAuth({
   jwtSecret: process.env.JWT_SECRET || 'dev-secret-change-this',
   jwtExpiry: '24h',
+  rootUsername: process.env.ROOT_USERNAME || 'superadmin',
+  rootPassword: process.env.ROOT_PASSWORD || 'changeme',
   database: { storage: './myapp.sqlite' }
 }));
 
@@ -444,7 +578,8 @@ app.get('/', (req, res) => {
 app.get('/dashboard', createAuth.protect(), (req, res) => {
   res.json({
     message: `Welcome to dashboard, ${req.user.username}!`,
-    user: req.user
+    user: req.user,
+    isRoot: req.user.isRoot
   });
 });
 
@@ -456,12 +591,43 @@ app.get('/admin', createAuth.adminOnly(), (req, res) => {
   });
 });
 
+// Root only routes
+app.get('/system', createAuth.rootOnly(), (req, res) => {
+  res.json({
+    message: 'System administration access granted',
+    user: req.user,
+    rootAccess: true
+  });
+});
+
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`👤 Default: root / changeme`);
+  console.log(`Server running on port ${PORT}`);
+  console.log(`👤 Default root user will be created on first run`);
+  console.log(`🔑 Username: ${process.env.ROOT_USERNAME || 'root'}`);
+  console.log(`🔑 Password: ${process.env.ROOT_PASSWORD || 'changeme'}`);
 });
 ```
+
+## Migration Guide
+
+If you're upgrading from an earlier version:
+
+### User IDs
+- All users now have unique integer IDs
+- JWT tokens include user IDs for better tracking
+
+### Root User Changes
+- Root user is now identified by `isRoot: true` flag
+- Root username is configurable
+- Root user cannot be deleted regardless of username
+
+### New Routes
+- `GET /api/v1/auth/root` - Get root user information (root only)
+
+### New Middleware
+- `createAuth.rootOnly()` - Protect routes for root user only
 
 ## License
 

@@ -11,12 +11,15 @@ class AuthMiddleware {
       dbOptions: options.database || {},
       apiPrefix: options.apiPrefix || '/api/v1/auth',
       saltRounds: options.saltRounds || 10,
+      rootUsername: options.rootUsername || 'root', // Allow customizable root username
+      rootPassword: options.rootPassword || 'changeme',
       ...options
     };
 
     this.db = null;
     this.router = express.Router();
     this.initialized = false;
+    this.rootUserId = null; // Store root user ID
   }
 
   async initialize() {
@@ -30,8 +33,13 @@ class AuthMiddleware {
 
     await this.db.connect();
 
-    // Create Users table
+    // Create Users table with ID as primary key
     this.db.createTable('User', {
+      id: {
+        type: DataTypes.INTEGER,
+        primaryKey: true,
+        autoIncrement: true
+      },
       username: {
         type: DataTypes.STRING,
         unique: true,
@@ -49,6 +57,10 @@ class AuthMiddleware {
         type: DataTypes.BOOLEAN,
         defaultValue: true
       },
+      isRoot: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
+      },
       lastLogin: DataTypes.DATE
     });
 
@@ -56,17 +68,22 @@ class AuthMiddleware {
 
     // Create root user if not exists
     const existingRoot = await this.db.findOne('User', {
-      where: { username: 'root' }
+      where: { isRoot: true }
     });
 
     if (!existingRoot) {
-      const hashedPassword = await bcrypt.hash('changeme', this.options.saltRounds);
-      await this.db.insert('User', {
-        username: 'root',
+      const hashedPassword = await bcrypt.hash(this.options.rootPassword, this.options.saltRounds);
+      const rootUser = await this.db.insert('User', {
+        username: this.options.rootUsername,
         password: hashedPassword,
-        role: 'admin'
+        role: 'admin',
+        isRoot: true
       });
-      console.log('✅ Root user created with password "changeme"');
+      this.rootUserId = rootUser.id;
+      console.log(`✅ Root user created with username "${this.options.rootUsername}" and password "${this.options.rootPassword}"`);
+    } else {
+      this.rootUserId = existingRoot.id;
+      console.log(`✅ Root user found with ID: ${this.rootUserId}`);
     }
 
     this.setupRoutes();
@@ -121,7 +138,8 @@ class AuthMiddleware {
           { 
             id: user.id, 
             username: user.username, 
-            role: user.role 
+            role: user.role,
+            isRoot: user.isRoot
           },
           this.options.jwtSecret,
           { expiresIn: this.options.jwtExpiry }
@@ -135,6 +153,7 @@ class AuthMiddleware {
             id: user.id,
             username: user.username,
             role: user.role,
+            isRoot: user.isRoot,
             lastLogin: user.lastLogin
           }
         });
@@ -250,7 +269,8 @@ class AuthMiddleware {
         const newUser = await this.db.insert('User', {
           username,
           password: hashedPassword,
-          role: ['user', 'admin'].includes(role) ? role : 'user'
+          role: ['user', 'admin'].includes(role) ? role : 'user',
+          isRoot: false // Regular users are never root
         });
 
         res.json({
@@ -260,7 +280,8 @@ class AuthMiddleware {
             id: newUser.id,
             username: newUser.username,
             role: newUser.role,
-            isActive: newUser.isActive
+            isActive: newUser.isActive,
+            isRoot: newUser.isRoot
           }
         });
 
@@ -279,7 +300,20 @@ class AuthMiddleware {
         const { username } = req.params;
         const currentUser = req.user;
 
-        if (username === 'root') {
+        // Check if user exists
+        const userToDelete = await this.db.findOne('User', {
+          where: { username }
+        });
+
+        if (!userToDelete) {
+          return res.status(404).json({
+            success: false,
+            message: 'User not found'
+          });
+        }
+
+        // Prevent deletion of root user
+        if (userToDelete.isRoot) {
           return res.status(403).json({
             success: false,
             message: 'Cannot delete root user'
@@ -290,18 +324,6 @@ class AuthMiddleware {
           return res.status(403).json({
             success: false,
             message: 'Cannot delete your own account'
-          });
-        }
-
-        // Check if user exists
-        const userToDelete = await this.db.findOne('User', {
-          where: { username }
-        });
-
-        if (!userToDelete) {
-          return res.status(404).json({
-            success: false,
-            message: 'User not found'
           });
         }
 
@@ -327,7 +349,7 @@ class AuthMiddleware {
       try {
         const users = await this.db.searchFields('User', 
           { isActive: true }, 
-          ['id', 'username', 'role', 'createdAt', 'lastLogin']
+          ['id', 'username', 'role', 'isRoot', 'createdAt', 'lastLogin']
         );
 
         res.json({
@@ -337,6 +359,40 @@ class AuthMiddleware {
 
       } catch (error) {
         console.error('Get users error:', error);
+        res.status(500).json({
+          success: false,
+          message: 'Internal server error'
+        });
+      }
+    });
+
+    // Get root user info route (root only)
+    this.router.get('/root', this.authenticateToken.bind(this), this.requireRoot.bind(this), async (req, res) => {
+      try {
+        const rootUser = await this.db.findById('User', this.rootUserId);
+        
+        if (!rootUser) {
+          return res.status(404).json({
+            success: false,
+            message: 'Root user not found'
+          });
+        }
+
+        res.json({
+          success: true,
+          rootUser: {
+            id: rootUser.id,
+            username: rootUser.username,
+            role: rootUser.role,
+            isRoot: rootUser.isRoot,
+            createdAt: rootUser.createdAt,
+            lastLogin: rootUser.lastLogin,
+            isActive: rootUser.isActive
+          }
+        });
+
+      } catch (error) {
+        console.error('Get root user error:', error);
         res.status(500).json({
           success: false,
           message: 'Internal server error'
@@ -355,6 +411,7 @@ class AuthMiddleware {
             id: user.id,
             username: user.username,
             role: user.role,
+            isRoot: user.isRoot,
             createdAt: user.createdAt,
             lastLogin: user.lastLogin
           }
@@ -413,6 +470,17 @@ class AuthMiddleware {
     next();
   }
 
+  // Root user middleware
+  requireRoot(req, res, next) {
+    if (!req.user.isRoot) {
+      return res.status(403).json({
+        success: false,
+        message: 'Root access required'
+      });
+    }
+    next();
+  }
+
   // Main middleware function
   middleware() {
     return async (req, res, next) => {
@@ -453,6 +521,19 @@ class AuthMiddleware {
       });
     };
   }
+
+  // Helper method to get root middleware for protecting root-only routes
+  rootOnly() {
+    return async (req, res, next) => {
+      if (!this.initialized) {
+        await this.initialize();
+      }
+      this.authenticateToken(req, res, (err) => {
+        if (err) return next(err);
+        this.requireRoot(req, res, next);
+      });
+    };
+  }
 }
 
 // Factory function
@@ -470,6 +551,11 @@ createAuth.protect = (options = {}) => {
 createAuth.adminOnly = (options = {}) => {
   const authMiddleware = new AuthMiddleware(options);
   return authMiddleware.adminOnly();
+};
+
+createAuth.rootOnly = (options = {}) => {
+  const authMiddleware = new AuthMiddleware(options);
+  return authMiddleware.rootOnly();
 };
 
 module.exports = createAuth;
