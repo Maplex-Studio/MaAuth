@@ -1,4 +1,4 @@
-# @maplex-lib/auth
+Maplex Auth
 
 A comprehensive authentication middleware for Express.js applications with JWT token management, user roles, and database integration.
 
@@ -26,28 +26,76 @@ import express from 'express';
 import { Database } from '@maplex-lib/database';
 import createAuth from '@maplex-lib/auth';
 
-const app = express();
-const db = new Database();
+async function main() {
+  const app = express();
+  
+  // Initialize and connect database first
+  const db = new Database(); // Uses in-memory SQLite by default
+  await db.connect(); // This is the key step you might be missing
+  
+  // Now create auth with connected database
+  const auth = createAuth({
+    database: db,
+    jwtSecret: 'your-secret-key',
+    rootUsername: 'admin',
+    rootPassword: 'secure-password'
+  });
+  
+  app.use(auth);
+  
+  // Protected route example
+  app.get('/protected', createAuth.protect({ database: db }), (req, res) => {
+    res.json({ message: 'This is a protected route!' });
+  });
+  
+  app.listen(3000, () => {
+    console.log('Server running on port 3000');
+  });
+}
 
-// Initialize auth middleware
-const auth = createAuth({
-  database: db,
-  jwtSecret: 'your-secret-key',
-  rootUsername: 'admin',
-  rootPassword: 'secure-password'
-});
+main().catch(console.error);
+```
 
-// Apply auth middleware
-app.use(auth);
+### With Persistent Storage
 
-// Protected route example
-app.get('/protected', createAuth.protect({ database: db }), (req, res) => {
-  res.json({ message: 'This is a protected route!' });
-});
+```javascript
+import express from 'express';
+import { Database } from '@maplex-lib/database';
+import createAuth from '@maplex-lib/auth';
+import fs from 'fs';
+import path from 'path';
 
-app.listen(3000, () => {
-  console.log('Server running on port 3000');
-});
+async function main() {
+  const app = express();
+
+  // Ensure data directory exists for persistent storage
+  const dataDir = './data';
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+
+  // Initialize database with file storage
+  const db = new Database({
+    storage: path.join(dataDir, 'app.db')
+  });
+  await db.connect();
+
+  // Initialize auth middleware
+  const auth = createAuth({
+    database: db,
+    jwtSecret: 'your-secret-key',
+    rootUsername: 'admin',
+    rootPassword: 'secure-password'
+  });
+
+  app.use(auth);
+  
+  app.listen(3000, () => {
+    console.log('Server running on port 3000');
+  });
+}
+
+main().catch(console.error);
 ```
 
 ## ⚙️ Configuration Options
@@ -249,7 +297,53 @@ Check out the `/examples` directory for complete implementation examples:
 - Custom middleware
 - Frontend integration
 
-## 🤝 Contributing
+## 🛠️ Troubleshooting
+
+### Common Issues
+
+#### Database Directory Error
+If you encounter `ENOENT: no such file or directory, mkdir` error:
+
+```javascript
+import fs from 'fs';
+import path from 'path';
+
+// Solution 1: Create directory before initializing database
+const dataDir = './data';
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
+const db = new Database({
+  storage: path.join(dataDir, 'app.db')
+});
+
+// Solution 2: Use in-memory database for testing
+const db = new Database({
+  storage: ':memory:'
+});
+
+// Solution 3: Use absolute path
+const db = new Database({
+  storage: path.resolve('./data/app.db')
+});
+```
+
+#### Multiple Auth Instances
+When using multiple auth instances, ensure each has a unique database instance:
+
+```javascript
+// ❌ Wrong - sharing database instance
+const sharedDb = new Database();
+const auth1 = createAuth({ database: sharedDb });
+const auth2 = createAuth({ database: sharedDb }); // This can cause conflicts
+
+// ✅ Correct - separate database instances
+const db1 = new Database({ storage: './data/auth1.db' });
+const db2 = new Database({ storage: './data/auth2.db' });
+const auth1 = createAuth({ database: db1 });
+const auth2 = createAuth({ database: db2 });
+```
 
 Contributions are welcome! Please read our contributing guidelines before submitting PRs.
 
